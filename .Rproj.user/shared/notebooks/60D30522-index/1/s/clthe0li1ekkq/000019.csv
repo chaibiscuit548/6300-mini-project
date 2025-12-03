@@ -1,0 +1,3 @@
+"0","al_perf <- read_csv(""data/al_perf.csv"")"
+"2","Error: 'data/al_perf.csv' does not exist in current working directory ('/Users/bilal/Documents/6300 - Databases and SQL/mini proj/website').
+"

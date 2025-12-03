@@ -1,0 +1,41 @@
+---
+title: "Flight Performance Insights"
+format:
+  html:
+    theme: flatly
+    toc: false
+---
+
+# Introduction
+
+This project explores patterns in **flight delays, cancellations, and performance** across U.S. airports and airlines. Using SQL on the Bureau of Transportation Statistics (BTS) on-time data set, I extracted insights about:
+
+-   Which airports and days are the busiest
+-   Which locations experience the greatest delays
+-   How cancellations vary by cause
+-   How flight volume changes over time
+
+The goal is to transform raw flight records into a **clear, data-driven story** about the U.S. air transportation system.
+
+# 1. Understanding the Data
+
+The dataset contains detailed records on domestic U.S. flights, including departure and arrival times, delays, cancellations, cancellation causes, airline codes, and airport information.
+
+```{r}
+#| warning: false
+#| message: false
+
+library(readr)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+al_perf <- read_csv("data/al_perf.csv")
+dim_airlines <- read_csv("data/L_AIRLINE_ID.csv")
+dim_airports <- read_csv("data/L_AIRPORT.csv")
+dim_airport_id <- read_csv("data/L_AIRPORT_ID.csv")
+dim_distance <- read_csv("data/L_DISTANCE_GROUP_250.csv")
+dim_cancel <- read_csv("data/L_CANCELATION.csv")
+dim_weekdays <- read_csv("data/L_WEEKDAYS.csv")
+```

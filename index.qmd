@@ -1,0 +1,471 @@
+---
+title: "Flight Performance Insights"
+format:
+  html:
+    theme: flatly
+    toc: false
+    embed-resources: true
+---
+
+# Introduction
+
+This project explores patterns in **flight delays, cancellations, and performance** across U.S. airports and airlines. Using SQL on the Bureau of Transportation Statistics (BTS) on-time data set, I extracted insights about:
+
+-   Which airports and days are the busiest
+-   Which locations experience the greatest delays
+-   How cancellations vary by cause
+-   How flight volume changes over time
+
+The goal is to transform raw flight records into a **clear, data-driven story** about the U.S. air transportation system. Before analyzing flight performance, it’s important to understand the structure and scope of the dataset.
+
+![](https://aviationa2z.com/wp-content/uploads/2024/10/Atlanta-Airport-1.webp){fig-align="center"}
+
+# 1. Understanding the Data
+
+The dataset contains detailed records on domestic U.S. flights, including departure and arrival times, delays, cancellations, cancellation causes, airline codes, and airport information.
+
+```{r}
+#| warning: false
+#| message: false
+
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(treemapify)
+```
+
+```{r}
+#| warning: false
+#| message: false
+
+al_perf <- read_csv("./data/al_perf.csv", show_col_types = FALSE)
+dim_airlines <- read_csv("data/L_AIRLINE_ID.csv")
+dim_airports_code <- read_csv("data/L_AIRPORT.csv")
+dim_airports_id <- read_csv("data/L_AIRPORT_ID.csv")
+dim_distance <- read_csv("data/L_DISTANCE_GROUP_250.csv")
+dim_cancel <- read_csv("data/L_CANCELATION.csv")
+dim_weekdays <- read_csv("data/L_WEEKDAYS.csv")
+```
+
+```{r}
+summary_info <- tibble(
+  Table = c("Main Fact Table", "Airlines", "Airports (Code)", "Airports (ID)",
+            "Distance Groups", "Cancellation Codes", "Weekdays"),
+  Rows = c(nrow(al_perf),
+           nrow(dim_airlines), nrow(dim_airports_code), nrow(dim_airports_id),
+           nrow(dim_distance), nrow(dim_cancel), nrow(dim_weekdays)),
+  Columns = c(ncol(al_perf),
+              ncol(dim_airlines), ncol(dim_airports_code), ncol(dim_airports_id),
+              ncol(dim_distance), ncol(dim_cancel), ncol(dim_weekdays))
+)
+
+summary_info
+```
+
+| The dataset contains **659,029 flight records** in the main fact table with **110 columns**.
+
+With a baseline understanding of the dataset, we next examine overall flight activity across airlines and airports. Identifying which carriers and hubs dominate total flight volume provides context for later sections on delays and cancellations, since higher-traffic operators exert more influence on system-wide performance.
+
+```{r}
+al_perf %>%
+  group_by(DOT_ID_Reporting_Airline) %>%
+  summarise(Flights = n()) %>%
+  left_join(dim_airlines, by = c("DOT_ID_Reporting_Airline" = "ID")) %>%
+  ggplot(aes(x = reorder(Name, Flights), y = Flights)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Total Flights per Airline",
+    x = "Airline",
+    y = "Number of Flights"
+  ) +
+  theme_minimal()
+```
+
+| The data shows that a small group of carriers accounts for the majority of U.S. flight activity. Southwest, Delta, American, and SkyWest operate substantially more flights than other airlines in the dataset. These high-volume carriers shape the overall performance of the national airspace more than any others.
+
+```{r}
+al_perf %>%
+  group_by(Origin) %>%
+  summarise(Flights = n()) %>%
+  left_join(dim_airports_code, by = c("Origin" = "Code")) %>%
+  arrange(desc(Flights)) %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(x = reorder(Name, Flights), y = Flights)) +
+  geom_col(fill = "tomato") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Busiest Origin Airports",
+    x = "Airport",
+    y = "Number of Flights"
+  ) +
+  theme_minimal()
+
+```
+
+| Flight activity is heavily concentrated in a few major hubs, with Atlanta leading by a wide margin. Chicago O’Hare and Dallas/Fort Worth also represent critical high-volume nodes. These airports play a central role in maintaining national traffic flow due to their consistently large departure counts.
+
+# 2. **Delay Patterns & Flight Performance**
+
+After understanding where flight activity is concentrated, we explore how reliably these operations perform. This section analyzes departure delays, early departures, and average performance across airlines and airports, highlighting patterns that influence passenger experience and system efficiency.
+
+```{r}
+#| warning: false
+#| message: false
+
+max_departure_delay <- read_csv("data/project_q1_bm1262.csv")
+max_early_departure <- read_csv("data/project_q2_bm1262.csv")
+weekday_rank <- read_csv("data/project_q3_bm1262.csv")
+airport_max_delay <- read_csv("data/project_q4_bm1262.csv")
+airline_airport_delay <- read_csv("data/project_q5_bm1262.csv")
+```
+
+## 2.1. Maximal Departure Delays per Airline
+
+```{r}
+max_departure_delay %>%
+  top_n(5, MaxDepartureDelayMinutes) %>%
+  ggplot(aes(x = reorder(AirlineName, MaxDepartureDelayMinutes), y = MaxDepartureDelayMinutes)) +
+  geom_col(fill = "#D55E00", width = 0.7) +
+  geom_text(aes(label = MaxDepartureDelayMinutes), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  labs(
+    title = "Top 5 Airlines with Maximum Departure Delays",
+    x = "Airline",
+    y = "Max Departure Delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
+| **American Airlines Inc. (AA)** stands out with the longest single departure delay, recorded at **2,347 minutes** (nearly 39 hours).
+
+### Takeaway
+
+Maximum departure delays vary widely by airline, with some carriers experiencing extreme delay events. These outliers highlight operational stress points that can influence reliability perceptions. Even though these delays are not typical, they reveal where irregular operations can be most severe.
+
+### **FAA Context / Implications**
+
+-   **Extreme Outliers:** The **2,347-minute delay** by American Airlines is a critical data point. It represents an exceptional failure in operations, likely due to a major non-routine event such as severe weather combined with crew/aircraft availability issues, or a catastrophic system failure.
+
+-   **Operational Risk:** This chart identifies carriers that have demonstrated an **exposure to extreme, prolonged disruption**. While these events are rare, they are highly consequential for passenger experience, crew legality, and FAA compliance. For a data story, this visual would highlight the *severity* of potential disruptions, contrasting it with the *frequency* or *total volume* of delays.
+
+## 2.2. Maximal Early Departures per Airline
+
+```{r}
+max_early_departure %>%
+  mutate(EarlyMinutes = abs(MaxEarlyDepartureMinutes)) %>%  # convert to positive
+  top_n(5, EarlyMinutes) %>%
+  arrange(EarlyMinutes) %>%
+  ggplot(aes(x = reorder(AirlineName, EarlyMinutes), y = EarlyMinutes)) +
+  geom_segment(aes(xend = AirlineName, y = 0, yend = EarlyMinutes), 
+               color = "#0072B2", size = 1) +
+  geom_point(color = "#0072B2", size = 4) +
+  geom_text(aes(label = EarlyMinutes), hjust = -0.3, size = 3.5, color = "black") +
+  coord_flip() +
+  labs(
+    title = "Top 5 Airlines with Largest Early Departures",
+    subtitle = "Positive values indicate minutes flights departed early",
+    x = "Airline",
+    y = "Minutes Early"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold"),
+    panel.grid.major.y = element_blank()
+  )
+
+```
+
+| The chart identifies the five airlines that have recorded the **single longest duration of an early departure** (in minutes) within the dataset's period. It focuses on the **maximum extent** to which a flight departed ahead of schedule for each airline.
+
+### Takeaway
+
+Some airlines show a tendency for early departures, with the most extreme cases occurring up to an hour ahead of schedule. These patterns can reflect operational efficiency or differences in scheduling practices. They also demonstrate that timing deviations occur on both ends, not just delays.
+
+### **FAA Context / Implications**
+
+-   **Schedule Padding:** Very large early departures, especially those near or over an hour, may indicate **significant schedule padding** (where extra time is added to the published schedule to improve on-time performance metrics) or a highly unusual, single operational decision to launch a flight far ahead of time (e.g., due to extreme incoming weather).
+
+-   **Passenger Impact:** While not a delay, an excessively early departure is a service failure. It can cause passengers to miss their flight, impacting their travel plans.
+
+-   **Operational Flexibility:** The data suggests that **SkyWest** and **Republic** have, at least once, operated with the greatest amount of scheduling flexibility or have taken the largest operational risk (since very early departures can disrupt gate assignments and air traffic sequencing).
+
+## 2.3. Rank Days of the Week by Flight Volume
+
+```{r}
+weekday_order <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+weekday_rank %>%
+  mutate(DayName = factor(DayName, levels = weekday_order)) %>%
+  ggplot(aes(x = DayName, y = NumFlights, group = 1)) +
+  geom_line(color = "#0072B2", size = 1.2) +
+  geom_point(color = "#0072B2", size = 4) +
+  geom_text(aes(label = NumFlights), vjust = -0.5, size = 3.5) +
+  labs(
+    title = "Weekly Flight Volume Trend",
+    subtitle = "Number of flights by day of the week",
+    x = "Day of Week",
+    y = "Number of Flights"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold")
+  )
+```
+
+| The chart is a **line chart** titled "**Weekly Flight Volume Trend**," which tracks the aggregate **number of flights** across the seven days of the week.
+
+### Takeaway
+
+Flight volume follows a predictable weekday pattern, with Monday, Tuesday, and Wednesday consistently recording the highest activity. Weekends show a noticeable decline in departures. This distribution indicates stronger business-travel demand during the workweek.
+
+### **FAA Context / Implications**
+
+-   **Peak Demand:** The FAA and air traffic control centers experience the highest sustained demand and workload during the **first three weekdays**. This is crucial for resource planning and managing congestion, as these days likely correspond to high business travel.
+
+-   **Capacity Buffer:** The significant drop in traffic on **Saturdays** provides the greatest **capacity buffer** for maintenance, system upgrades, or handling weather-related recovery without severely impacting the system.
+
+-   **Operational Scheduling:** The trend reflects how the airline industry schedules flights to meet the demand of business and early-week travel, which is important for understanding expected congestion and the timing of delays.
+
+## 2.4. **Airport with the Highest Average Departure Delay**
+
+```{r}
+cat(
+  "Airport with Highest Average Departure Delay:\n",
+  airport_max_delay$AirportName, "(", airport_max_delay$AirportCode, ")\n",
+  "Average Delay: ", round(airport_max_delay$AvgDepartureDelay, 1), "minutes\n"
+)
+```
+
+| The output directly identifies the airport with the **worst average departure delay performance** across the entire dataset.
+
+### Takeaway
+
+Pago Pago International shows the highest average delay across all airports. While this airport has far fewer total flights, its delay values are consistently high. This suggests localized operational challenges rather than system-wide effects.
+
+![](https://i.cdn.newsbytesapp.com/images/l69220240116183655.jpeg){fig-align="center" width="651"}
+
+### **FAA Context / Implications**
+
+-   **Geographic Exception:** Pago Pago's extremely high average delay is a significant outlier, likely due to its **remote location** and unique operational challenges. Flights to and from remote Pacific island territories often involve long-haul carriers, limited daily frequencies, and a dependency on weather/operational conditions that are less flexible than continental U.S. hubs.
+
+-   **Service Quality Metric:** For a data story, this establishes the **upper limit of delay severity** when considering average performance. While major hubs (like ATL or ORD) drive the volume of delays, PPG highlights a critical example of severe, structural performance issues, likely due to low-frequency service and a lack of quick recovery options.
+
+-   **Targeted Investigation:** This finding warrants a deeper investigation into the specific reasons for delays at PPG whether it's weather, crew rest requirements for long flights, or reliance on a single carrier/aircraft for service.
+
+## 2.5. Airport with Highest Average Departure Delay
+
+```{r}
+top_airport_per_airline <- airline_airport_delay %>%
+  group_by(AirlineName) %>%
+  slice_max(AvgDepDelay, n = 1) %>%
+  ungroup()
+
+top5_airlines <- top_airport_per_airline %>%
+  slice_max(AvgDepDelay, n = 5) %>%
+  arrange(AvgDepDelay)
+
+top5_airlines %>%
+  ggplot(aes(x = reorder(AirlineName, AvgDepDelay), y = AvgDepDelay)) +
+  geom_segment(aes(xend = AirlineName, y = 0, yend = AvgDepDelay), color = "#D55E00", size = 1) +
+  geom_point(color = "#D55E00", size = 4) +
+  geom_text(aes(label = round(AvgDepDelay,1)), hjust = -0.3, size = 4) +
+  coord_flip() +
+  labs(
+    title = "Top 5 Airlines by Maximum Average Departure Delay at a Single Airport",
+    subtitle = "One airport per airline with highest average departure delay",
+    x = "Airline",
+    y = "Average Departure Delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.title = element_text(face = "bold"),
+    panel.grid.major.y = element_blank()
+  )
+
+```
+
+| The chart shows the **single worst-performing airport** for each airline and then ranks the top five airlines based on that **maximum average delay**. This means the delay shown is **not** the airline's overall average, but their worst-case average at any single airport they serve.
+
+### **Takeaway**
+
+Patterns differ by carrier, with certain airline-airport combinations showing particularly high average delays. These cases point to localized inefficiencies or operational constraints specific to certain routes. They highlight where targeted improvements may be more impactful than broad system-wide changes.
+
+### **FAA Context / Implications**
+
+-   **Structural Failure:** The **505-minute average delay** for ExpressJet at a single airport represents a massive, sustained operational failure at that specific location. This is not a single incident but an **average** over the entire dataset, pointing to a severe, chronic breakdown in scheduling, aircraft turnover, or connectivity at that one hub.
+
+-   **Network Reliability:** For a data story, this visual highlights where **regional carriers** (like ExpressJet, SkyWest, Mesa, and Endeavor) exhibit extreme vulnerability in their networks. Given that regional carriers often feed major hubs, this structural instability can have a major cascading effect on the entire NAS.
+
+-   **Differentiating Metrics:** This chart is critical because it separates **worst-case average performance** from the absolute worst **single event** (as seen in your "Max Departure Delay" chart). The average suggests a problem with system *design*, while the single event suggests an operational *anomaly*.
+
+## 3. **Cancellations and Other Flight Metrics**
+
+Delays represent one form of operational disruption, but cancellations often have even greater downstream effects. This section focuses on canceled flights, the frequency of cancellation causes, and the airports where specific disruptions occur most often. These insights help identify systemic weak points within the National Airspace System.
+
+```{r}
+#| warning: false
+#| message: false
+
+canceled_flights <- read_csv("data/project_q6a_bm1262.csv")
+most_freq_cancellation <- read_csv("data/project_q6b_bm1262.csv")
+avg_flights_3days <- read_csv("data/project_q7_bm1262.csv")
+```
+
+### 3.1. Total Number of Canceled Flights
+
+```{r}
+cat(
+  "Total Number of Canceled Flights in the Dataset:\n",
+  canceled_flights$NumCanceledFlights, "\n"
+)
+```
+
+| Out of all recorded flights in the dataset, **12,928 flights were canceled**.
+
+### **Takeaway**
+
+The dataset includes a notable number of canceled flights, confirming that operational disruptions are a regular part of domestic air travel. These cancellations represent a significant source of passenger inconvenience and system-level delays.
+
+### 3.2. **Most Frequent Cancellation Reason per Departure Airport**
+
+```{r}
+top_cancellations <- most_freq_cancellation %>%
+  group_by(AirportName) %>%
+  slice_max(NumCancellations, n = 1) %>%
+  ungroup() %>%
+  slice_max(NumCancellations, n = 10) %>%
+  arrange(NumCancellations)
+
+ggplot(top_cancellations, aes(
+    area = NumCancellations,
+    fill = MostFrequentReason,
+    label = paste0(AirportName, "\n", NumCancellations)
+  )) +
+  geom_treemap(color = "white", size = 0.5) +
+  geom_treemap_text(
+    fontface = "bold",
+    colour = "white",
+    place = "centre",
+    grow = TRUE,
+    reflow = TRUE
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Top 10 Airports by Most Frequent Cancellation Reason",
+    subtitle = "Area represents number of cancellations; color indicates reason"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    legend.title = element_text(face = "bold")
+  )
+```
+
+| The visual is a **Treemap** that shows the **Top 10 Airports** ranked by their total number of flight cancellations. The **size** of each rectangular tile corresponds to the total number of cancellations at that airport, and the **color** represents the single most frequent reason for cancellation at that airport (either **National Air System** or **Weather**).
+
+### **Takeaway**
+
+1.  **Chicago O'Hare (ORD)** has the highest volume of cancellations (**511**), and its dominant reason is the **National Air System** (NAS - green).
+
+2.  **Weather** (orange) is the most frequent cancellation cause for many major hubs, including **New York LaGuardia (LGA)**, **Dallas/Fort Worth (DFW)**, **Newark Liberty (EWR)**, and **Denver (DEN)**.
+
+3.  The top two cancellation airports ORD and DFW/LGA (tied for the next rank) are split between a dominant NAS cause and a dominant Weather cause, pointing to different core problems at these major hubs.
+
+![Chicago O'Hare International Airport](https://s28477.pcdn.co/wp-content/uploads/2018/01/ORD_1-984x554.jpg){fig-align="center"}
+
+### **FAA Context / Implications**
+
+-   **Systemic vs. Environmental Issues:** The visualization clearly separates cancellation drivers. Airports dominated by the **NAS** reason (like ORD) suggest problems are **systemic** (e.g., equipment failure, air traffic control, heavy traffic congestion, operational decisions), which the FAA can potentially control or mitigate with infrastructure and procedural changes.
+
+-   **Weather Vulnerability:** Airports dominated by **Weather** (like LGA, DFW, and EWR) indicate a high vulnerability to environmental factors. For these hubs, strategies should focus on **weather forecasting accuracy**, quick **recovery procedures**, and better **diversion management**. This contrast is essential for building a data-driven story about where intervention is most effective.
+
+### 3.3. Average Number of Flights Over The Preceding 3 Days
+
+To understand how flight activity evolves over time, we examine a 3-day rolling average of national flight volume. This smooths out daily fluctuations and reveals broader temporal patterns such as weekday cycles or holiday drops that influence staffing, resource allocation, and airspace planning.
+
+```{r}
+#| warning: false
+#| message: false
+
+ggplot(avg_flights_3days, aes(x = as.Date(FlightDate), y = AvgFlightsPrev3Days)) +
+  geom_line(color = "#0072B2", size = 1.2) +
+  geom_point(color = "#D55E00", size = 2, alpha = 0.7) +
+  labs(
+    title = "3-Day Moving Average of Daily Flights",
+    subtitle = "Smooth trend showing average number of flights over the preceding 3 days",
+    x = "Date",
+    y = "Average Number of Flights"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40")
+  ) +
+  geom_vline(xintercept = as.Date("2019-07-04"), linetype = "dashed", color = "gray40") +
+  annotate("text", x = as.Date("2019-07-04"), y = max(avg_flights_3days$AvgFlightsPrev3Days),
+           label = "July 4th Holiday", vjust = -0.5, hjust = 0.5, color = "gray20", size = 3.5)
+```
+
+| The visual is a **line chart** that uses a 3-day **moving average** to smooth out daily fluctuations and show the underlying trend in air traffic volume across the month of July.
+
+### **Takeaway**
+
+The rolling average smooths daily fluctuations and highlights underlying traffic patterns. The trend shows consistent weekday peaks with holiday-related dips, revealing predictable cycles in national airspace demand. This time-series view provides context for staffing and resource planning.
+
+### **FAA Context / Implications**
+
+-   **Holiday Impact:** The July 4th drop demonstrates that **major national holidays** temporarily cause a substantial reduction in commercial air traffic, likely due to a sharp decline in business travel coinciding with a major leisure travel period where travel days shift away from the holiday itself.
+
+-   **Systemic Load Cycles:** The regular weekly peaks show the consistent high load periods the National Airspace System (NAS) must manage. These **mid-week peaks** are the times when the system is most stressed and most vulnerable to delays. The weekend dip provides a consistent, albeit brief, **operational recovery period**.
+
+-   **Smoothing Data:** By using a 3-day moving average, the chart effectively filters out noise to highlight these two major trends: the predictable **weekly cycle** and the acute impact of the **holiday anomaly**.
+
+## 4. Key Insights
+
+After reviewing volume, delays, cancellations, and temporal patterns, we consolidate the major findings. This section summarizes the operational significance of the observed trends and discusses what they imply for efficiency, passenger experience, and FAA resource management.
+
+### 4.1. Operational Insights: Dominance and Vulnerability
+
+The analysis of flight volume and performance metrics reveals that the air travel system's success or failure is concentrated among a few major players and is highly exposed to chronic issues within specific segments.
+
+-   **Dominance of Major Carriers and Hubs:** The top four airlines (**Southwest, Delta, American, and SkyWest**) and the top three airports (**Atlanta-ATL, Chicago-ORD, and Dallas/Fort Worth-DFW**) completely dominate the system by **flight volume**. Their performance directly dictates the overall efficiency of the National Airspace System (NAS). Disruptions at these few points have the largest cascading effect nationwide.
+
+-   **Extreme Delay Exposure in Regional Carriers:** While major carriers fly the most, **regional carriers** (ExpressJet, SkyWest, Mesa, and Envoy) show an alarming exposure to extreme delays. ExpressJet, in particular, recorded a maximum average departure delay of **505 minutes** at a single airport a finding that suggests a **structural failure** or chronic operational bottleneck rather than a simple anomaly.
+
+![SkyWest Jet](https://t.plnspttrs.net/32791/1381081_11298dbb38_280.jpg){fig-align="center"}
+
+-   **Cancellation Drivers are Bifurcated:** High-volume cancellations at major hubs are caused by two distinct factors:
+
+    -   **National Air System (NAS)**: Dominant at airports like **Chicago O'Hare (ORD)**, suggesting issues related to air traffic control, runway capacity, or equipment that the FAA can directly address.
+
+    -   **Weather**: Dominant at airports like **Newark (EWR)** and **Dallas/Fort Worth (DFW)**, indicating high vulnerability to environmental conditions where mitigation must focus on swift recovery protocols.
+
+### 4.2. FAA Resource Allocation, Efficiency, and Passenger Experience
+
+The data provides a clear roadmap for where the FAA and carriers should focus their resources to maximize efficiency and minimize passenger inconvenience.
+
+-   **Resource Prioritization:** FAA resources (staffing, air traffic control technology, etc.) should be overwhelmingly prioritized at the **top 10 busiest origin airports** and during the **peak travel days** (Monday through Wednesday) to manage congestion and prevent delays from escalating.
+
+-   **Efficiency vs. Padding:** The large range in departure scheduling from the extreme delay of **2,347 minutes** (American Airlines) to the maximum early departure of **66 minutes** (SkyWest) suggests high inconsistency in operations. While early departures suggest schedule padding, the extreme delays indicate an urgent need to improve robust contingency planning and response protocols.
+
+-   **Service Quality Outliers:** The remote location of **Pago Pago (PPG)** having the highest average departure delay (**84.4 minutes**) highlights a critical service quality issue in low-frequency, long-haul routes. The FAA must consider the unique challenges of non-continental U.S. air service.
+
+### 4.3. Clear Temporal and Geographic Patterns
+
+Predictable cycles and geographic differences offer opportunities for proactive management rather than reactive responses.
+
+-   **Weekly Cycle:** Air traffic demand is highly predictable, peaking consistently from **Monday to Wednesday** and dipping significantly on **Saturday** (the lowest volume day). This Saturday drop offers the greatest window for scheduled maintenance and non-urgent system upgrades.
+
+-   **Holiday Impact:** Major holidays, such as **July 4th**, cause a deep, short-term reduction in overall flight volume, offering a predictable, though short, system lull.
+
+-   **Geographic Vulnerability:** The analysis of cancellations shows that the type of problem is geographically distinct: cold-weather/congestion hubs (ORD) battle NAS issues, while others (DFW, EWR) are primarily battling weather. This requires geographically tailored solutions rather than a one-size-fits-all approach to cancellation management.
